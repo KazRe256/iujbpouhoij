@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#121417">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>教科書サーチカメラ</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+/* 教科書を蛍光ペンでなぞる感覚：暗いカメラ画面＋蛍光マーカー色 */
+:root{--bg:#121417;--panel:#1c1f24;--line:#2c3038;--ink:#f2f0ea;--mute:#9aa0a8;--mark:#ffe94d;--danger:#ff6b6b}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1.5 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+button,input,select{font:inherit;color:inherit}
+.app{display:grid;grid-template-rows:auto minmax(0,1fr) auto minmax(0,38vh);height:100dvh;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+header{padding:10px 12px 8px;display:grid;gap:8px;background:var(--bg);border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:center;gap:8px}
+.top h1{font-size:15px;margin:0;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{font-size:12px;padding:3px 10px;border-radius:99px;background:var(--panel);color:var(--mute);white-space:nowrap}
+.pill.busy{color:#121417;background:var(--mark)}
+.pill.err{color:#fff;background:var(--danger)}
+.search{display:flex;gap:6px}
+.search input{flex:1;height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel);padding:0 12px;font-size:16px}
+.search input:focus,button:focus-visible,select:focus-visible{outline:2px solid var(--mark);outline-offset:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;min-height:0}
+.chip{font-size:13px;padding:2px 10px;border-radius:99px;color:#121417;font-weight:700}
+.chip b{font-weight:400;margin-left:6px;opacity:.75}
+.opts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--mute)}
+.opts select{height:32px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0 6px;font-size:13px}
+.opts label{display:flex;align-items:center;gap:4px}
+.stage{position:relative;background:#000;overflow:hidden;touch-action:none}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+.stage video{display:none}
+.hint{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(0,0,0,.6);padding:6px 12px;border-radius:99px;font-size:13px;white-space:nowrap;pointer-events:none}
+.ctrl{display:flex;justify-content:space-around;align-items:center;padding:8px 6px;background:var(--bg);border-top:1px solid var(--line)}
+.ib{width:56px;height:52px;border:0;border-radius:12px;background:transparent;display:grid;place-items:center;font-size:11px;color:var(--mute);gap:2px;cursor:pointer}
+.ib svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+.ib.on{color:#121417;background:var(--mark)}
+.ib:disabled{opacity:.35}
+.shutter{width:68px;height:68px;border-radius:50%;border:4px solid var(--ink);background:var(--mark);color:#121417;font-weight:700;font-size:13px;cursor:pointer}
+.shutter.live{background:var(--ink)}
+.shutter:disabled{opacity:.5}
+.sheet{background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;height:42px;border:0;background:none;color:var(--mute);border-bottom:2px solid transparent;cursor:pointer;font-size:14px}
+.tabs button.on{color:var(--ink);border-color:var(--mark)}
+.pane{overflow:auto;padding:8px 12px 16px;flex:1;min-height:0}
+.empty{color:var(--mute);font-size:14px;padding:12px 0}
+.hit{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;width:100%;text-align:left}
+.hit .dot{width:10px;height:10px;border-radius:50%;margin-top:7px;flex:none}
+.hit p{margin:0;font-size:15px;overflow-wrap:anywhere}
+mark{color:#121417;border-radius:3px;padding:0 2px}
+.full{white-space:pre-wrap;font-size:15px;overflow-wrap:anywhere}
+.crop{border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;display:grid;gap:8px}
+.crop img{max-width:100%;max-height:220px;border-radius:6px;justify-self:start;background:#fff}
+.crop textarea{width:100%;min-height:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:15px;resize:vertical}
+.row{display:flex;flex-wrap:wrap;gap:6px}
+.btn{min-height:40px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--bg);cursor:pointer;font-size:14px;text-decoration:none;display:inline-flex;align-items:center}
+.btn.pri{background:var(--mark);color:#121417;border-color:var(--mark);font-weight:700}
+.btn.del{color:var(--danger)}
+.pop{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:flex-end;justify-content:center;z-index:9}
+.pop.show{display:flex}
+.card{background:var(--panel);width:min(520px,100%);border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:grid;gap:12px}
+.card h2{margin:0;font-size:22px}
+.card .ctx{color:var(--mute);font-size:14px;overflow-wrap:anywhere}
+.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 12px);transform:translateX(-50%);background:var(--ink);color:#121417;padding:8px 14px;border-radius:99px;font-size:14px;z-index:10;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+@media(min-width:900px){
+ .app{grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:auto minmax(0,1fr) auto}
+ header{grid-column:1/3}
+ .stage{grid-column:1;grid-row:2}
+ .ctrl{grid-column:1;grid-row:3}
+ .sheet{grid-column:2;grid-row:2/4;border-left:1px solid var(--line)}
+}
+@media(prefers-reduced-motion:reduce){.toast{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+ <header>
+  <div class="top"><h1>教科書サーチカメラ</h1><span class="pill" id="status">準備中…</span></div>
+  <form class="search" id="form">
+   <input id="q" type="search" enterkeyhint="search" placeholder="探す単語（スペース区切りで複数）" autocomplete="off">
+   <button class="btn pri" type="submit">スキャン</button>
+  </form>
+  <div class="chips" id="chips"></div>
+  <div class="opts">
+   <select id="lang" aria-label="読み取り言語">
+    <option value="jpn+eng">日本語（横書き）＋英語</option>
+    <option value="jpn_vert">日本語（縦書き）</option>
+    <option value="eng">英語のみ</option>
+   </select>
+   <label><input type="checkbox" id="fuzzy"> あいまい検索</label>
+  </div>
+ </header>
+
+ <div class="stage" id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="cv"></canvas>
+  <div class="hint" id="hint">単語を入力してスキャン</div>
+ </div>
+
+ <div class="ctrl">
+  <button class="ib" id="torch" type="button" disabled><svg viewBox="0 0 24 24"><path d="M9 2h6l-1 6h-4zM10 8h4v13h-4z"/></svg>ライト</button>
+  <button class="ib" id="auto" type="button"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4"/></svg>自動</button>
+  <button class="shutter" id="shot" type="button">スキャン</button>
+  <button class="ib" id="cropBtn" type="button"><svg viewBox="0 0 24 24"><path d="M6 2v16h16M2 6h16v16"/></svg>切り抜き</button>
+  <label class="ib" for="file"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>写真</label>
+  <input type="file" id="file" accept="image/*" hidden>
+ </div>
+
+ <section class="sheet">
+  <div class="tabs" role="tablist">
+   <button class="on" data-tab="hits">一致 <span id="nHits"></span></button>
+   <button data-tab="text">全文</button>
+   <button data-tab="crops">切り抜き <span id="nCrops"></span></button>
+  </div>
+  <div class="pane" id="pane-hits"></div>
+  <div class="pane" id="pane-text" hidden></div>
+  <div class="pane" id="pane-crops" hidden></div>
+ </section>
+</div>
+
+<div class="pop" id="pop"><div class="card" id="card"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+{
+const $=id=>document.getElementById(id);
+const video=$('video'),cv=$('cv'),ctx=cv.getContext('2d'),stage=$('stage');
+const COLORS=['#ffe94d','#ff8fc8','#6fe3ff','#8dff8a','#ffb35c','#c7a6ff'];
+const S={mode:'live',frame:null,lines:[],hits:[],crops:[],terms:[],cropMode:false,drag:null,auto:false,busy:false,worker:null,stream:null,torch:false,fuzzy:false,lang:'jpn+eng',lastText:''};
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const load=(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}};
+const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+
+function status(t,cls=''){const p=$('status');p.textContent=t;p.className='pill '+cls}
+let tt;function toast(t){const e=$('toast');e.textContent=t;e.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>e.classList.remove('show'),1800)}
+
+/* ---------- 文字の正規化と検索 ---------- */
+const k2h=s=>s.replace(/[ァ-ヶ]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+function norm(s){s=(s||'').normalize('NFKC').toLowerCase().replace(/\s+/g,'');return S.fuzzy?k2h(s):s}
+function parseTerms(){
+ const raw=$('q').value.split(/[\s,、，]+/).filter(Boolean);
+ S.terms=[...new Set(raw)].map((t,i)=>({t,chars:[...norm(t)],color:COLORS[i%COLORS.length]})).filter(x=>x.chars.length);
+}
+function findIn(chars,q){
+ const out=[],n=q.length,maxErr=S.fuzzy&&n>=3?1:0;
+ for(let i=0;i+n<=chars.length;i++){
+  let e=0;for(let j=0;j<n;j++){if(chars[i+j]!==q[j]&&++e>maxErr)break}
+  if(e<=maxErr){out.push([i,i+n]);i+=n-1}
+ }
+ return out;
+}
+const union=bs=>bs.reduce((a,b)=>({x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Math.max(a.x1,b.x1),y1:Math.max(a.y1,b.y1)}));
+const isAscii=s=>/^[\x21-\x7e]/.test(s||'');
+
+/* OCR結果 → 行ごとの文字（座標つき）に変換 */
+function extractLines(data,k,ox=0,oy=0){
+ const sc=b=>({x0:b.x0/k+ox,y0:b.y0/k+oy,x1:b.x1/k+ox,y1:b.y1/k+oy});
+ const out=[];
+ const push=(ln,pb)=>{
+  const syms=[];
+  (ln.words||[]).forEach((w,wi)=>{
+   const ss=(w.symbols&&w.symbols.length)?w.symbols:[w];
+   ss.forEach(s=>{if((s.text||'').trim())syms.push({text:s.text,b:sc(s.bbox),w:wi})});
+  });
+  if(!syms.length)return;
+  const lb=sc(ln.bbox);
+  out.push({syms,bbox:lb,para:pb?sc(pb):lb});
+ };
+ if(data.blocks&&data.blocks.length){for(const b of data.blocks)for(const p of b.paragraphs||[])for(const l of p.lines||[])push(l,p.bbox)}
+ else (data.lines||[]).forEach(l=>push(l,l.paragraph&&l.paragraph.bbox));
+ for(const l of out){
+  l.chars=[];l.map=[];
+  l.syms.forEach((s,i)=>{for(const ch of norm(s.text)){l.chars.push(ch);l.map.push(i)}});
+  l.display=l.syms.map((s,i)=>(i&&s.w!==l.syms[i-1].w&&isAscii(s.text)&&isAscii(l.syms[i-1].text)?' ':'')+s.text);
+ }
+ return out;
+}
+function computeHits(){
+ S.hits=[];
+ S.lines.forEach((l,li)=>{
+  S.terms.forEach((t,ti)=>{
+   for(const [a,b] of findIn(l.chars,t.chars)){
+    const s0=l.map[a],s1=l.map[b-1];
+    S.hits.push({li,ti,s0,s1,b:union(l.syms.slice(s0,s1+1).map(s=>s.b))});
+   }
+  });
+ });
+ S.hits.sort((a,b)=>a.b.y0-b.b.y0||a.b.x0-b.b.x0);
+ renderChips();renderHits();renderText();
+}
+
+/* ---------- 描画 ---------- */
+function srcSize(){return S.mode==='live'?[video.videoWidth,video.videoHeight]:S.frame?[S.frame.width,S.frame.height]:[0,0]}
+function fit(){const r=stage.getBoundingClientRect(),d=devicePixelRatio||1;cv.width=Math.round(r.width*d);cv.height=Math.round(r.height*d)}
+new ResizeObserver(fit).observe(stage);
+function view(){const [iw,ih]=srcSize();if(!iw)return null;const s=Math.min(cv.width/iw,cv.height/ih);return{s,ox:(cv.width-iw*s)/2,oy:(cv.height-ih*s)/2}}
+function draw(){
+ ctx.fillStyle='#000';ctx.fillRect(0,0,cv.width,cv.height);
+ const v=view();
+ if(v){
+  const src=S.mode==='live'?video:S.frame;
+  const [iw,ih]=srcSize();
+  ctx.drawImage(src,v.ox,v.oy,iw*v.s,ih*v.s);
+  const R=b=>[v.ox+b.x0*v.s,v.oy+b.y0*v.s,(b.x1-b.x0)*v.s,(b.y1-b.y0)*v.s];
+  for(const h of S.hits){
+   const [x,y,w,hh]=R(h.b),p=Math.max(2,hh*.15),c=S.terms[h.ti]?.color||COLORS[0];
+   ctx.globalCompositeOperation='multiply';ctx.fillStyle=c;ctx.fillRect(x-p,y-p,w+2*p,hh+2*p);
+   ctx.globalCompositeOperation='source-over';ctx.strokeStyle=c;ctx.lineWidth=Math.max(2,devicePixelRatio*1.5);ctx.strokeRect(x-p,y-p,w+2*p,hh+2*p);
+  }
+  if(S.flash){const [x,y,w,hh]=R(S.flash.b);ctx.strokeStyle='#fff';ctx.lineWidth=4*devicePixelRatio;ctx.strokeRect(x-8,y-8,w+16,hh+16)}
+  if(S.drag){
+   const b=normRect(S.drag),[x,y,w,hh]=R(b);
+   ctx.fillStyle='rgba(0,0,0,.55)';
+   ctx.fillRect(0,0,cv.width,y);ctx.fillRect(0,y+hh,cv.width,cv.height-y-hh);ctx.fillRect(0,y,x,hh);ctx.fillRect(x+w,y,cv.width-x-w,hh);
+   ctx.setLineDash([8,6]);ctx.strokeStyle='#fff';ctx.lineWidth=2*devicePixelRatio;ctx.strokeRect(x,y,w,hh);ctx.setLineDash([]);
+  }
+ }
+ requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---------- カメラ ---------- */
+async function startCamera(){
+ if(!navigator.mediaDevices?.getUserMedia){hint('このブラウザではカメラが使えません。「写真」から読み込めます');return}
+ try{
+  S.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+  video.srcObject=S.stream;await video.play();
+  const tr=S.stream.getVideoTracks()[0],cap=tr.getCapabilities?.()||{};
+  $('torch').disabled=!cap.torch;
+  try{if(cap.focusMode?.includes('continuous'))await tr.applyConstraints({advanced:[{focusMode:'continuous'}]})}catch(e){}
+ }catch(e){
+  hint(location.protocol==='https:'||location.hostname==='localhost'?'カメラの使用が許可されていません。「写真」から読み込めます':'カメラはhttpsで開いたときだけ使えます');
+ }
+}
+function hint(t){$('hint').textContent=t;$('hint').hidden=!t}
+function updHint(){
+ if(S.cropMode)hint('切り抜きたい範囲をドラッグ');
+ else if(!S.terms.length)hint('単語を入力してスキャン');
+ else if(S.mode==='frozen')hint(S.hits.length?'ハイライトをタップで検索・切り抜き':'見つかりませんでした');
+ else hint(S.auto?'自動スキャン中…':'ページを写してスキャン');
+}
+
+/* ---------- OCR ---------- */
+let queue=Promise.resolve();
+const ocr=(img)=>(queue=queue.catch(()=>{}).then(()=>S.worker.recognize(img,{},{text:true,blocks:true})));
+async function initWorker(){
+ S.busy=true;setBtns();status('OCR準備中…','busy');
+ try{
+  if(S.worker){await S.worker.terminate();S.worker=null}
+  S.worker=await Tesseract.createWorker(S.lang.split('+'),1,{logger:m=>{
+   if(m.status==='recognizing text')status('読み取り中 '+Math.round(m.progress*100)+'%','busy');
+   else if(/load|initializ/.test(m.status))status('言語データ読込 '+Math.round((m.progress||0)*100)+'%','busy');
+  }});
+  await S.worker.setParameters({tessedit_pageseg_mode:S.lang==='jpn_vert'?'5':'3',preserve_interword_spaces:'1'});
+  status('準備OK');
+ }catch(e){console.error(e);status('OCRを読み込めません','err');toast('ネット接続を確認してください')}
+ S.busy=false;setBtns();
+}
+function grab(){
+ const src=S.mode==='live'?video:S.frame,[w,h]=srcSize();
+ if(!w)return null;
+ const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(src,0,0);return c;
+}
+function prep(c,max=2000){
+ const k=Math.min(1,max/Math.max(c.width,c.height)),o=document.createElement('canvas');
+ o.width=Math.round(c.width*k);o.height=Math.round(c.height*k);
+ const g=o.getContext('2d');g.filter='grayscale(1) contrast(1.35)';g.drawImage(c,0,0,o.width,o.height);
+ return{o,k};
+}
+async function scan(freeze=true){
+ if(S.busy||!S.worker)return;
+ const full=grab();if(!full){toast('映像がまだありません');return}
+ S.busy=true;setBtns();
+ if(freeze&&S.mode==='live'){S.frame=full;S.mode='frozen'}
+ try{
+  const {o,k}=prep(full);
+  const {data}=await ocr(o);
+  S.lines=extractLines(data,k);
+  S.lastText=S.lines.map(l=>l.display.join('')).join('\n');
+  computeHits();
+  status(S.hits.length?S.hits.length+'件見つかりました':'見つかりませんでした');
+  if(freeze&&S.terms.length&&navigator.vibrate&&S.hits.length)navigator.vibrate(30);
+ }catch(e){console.error(e);status('読み取り失敗','err')}
+ S.busy=false;setBtns();updHint();
+ if(S.auto&&S.mode==='live')setTimeout(()=>S.auto&&S.mode==='live'&&scan(false),500);
+}
+function goLive(){S.mode='live';S.frame=null;S.hits=[];S.lines=[];S.flash=null;S.drag=null;setCrop(false);renderHits();renderText();renderChips();updHint();setBtns()}
+function setBtns(){
+ const sh=$('shot');
+ sh.textContent=S.mode==='frozen'?'ライブ':(S.busy?'…':'スキャン');
+ sh.className='shutter'+(S.mode==='frozen'?' live':'');
+ sh.disabled=S.mode==='live'&&(S.busy||!S.worker);
+ $('auto').classList.toggle('on',S.auto);
+ $('cropBtn').classList.toggle('on',S.cropMode);
+ $('torch').classList.toggle('on',S.torch);
+}
+
+/* ---------- 一覧表示 ---------- */
+function ctxHTML(l,s0,s1,color){
+ const a=Math.max(0,s0-14),b=Math.min(l.syms.length,s1+15),d=l.display;
+ return (a?'…':'')+esc(d.slice(a,s0).join(''))+`<mark style="background:${color}">${esc(d.slice(s0,s1+1).join('').trim())}</mark>`+esc(d.slice(s1+1,b).join(''))+(b<l.syms.length?'…':'');
+}
+function renderChips(){
+ $('chips').innerHTML=S.terms.map((t,i)=>`<span class="chip" style="background:${t.color}">${esc(t.t)}<b>${S.lines.length?S.hits.filter(h=>h.ti===i).length+'件':''}</b></span>`).join('');
+ $('nHits').textContent=S.hits.length?'('+S.hits.length+')':'';
+}
+function renderHits(){
+ const p=$('pane-hits');
+ if(!S.terms.length){p.innerHTML='<div class="empty">上の欄に探したい単語を入れてください。複数の単語はスペースで区切ると色分けして探せます。</div>';return}
+ if(!S.lines.length){p.innerHTML='<div class="empty">ページを写して「スキャン」を押すと、見つかった場所がここに並びます。</div>';return}
+ if(!S.hits.length){p.innerHTML='<div class="empty">見つかりませんでした。ピントを合わせて近づくか、「あいまい検索」をオンにしてみてください。</div>';return}
+ p.innerHTML=S.hits.map((h,i)=>{const t=S.terms[h.ti],l=S.lines[h.li];return`<button class="hit" data-i="${i}" type="button"><span class="dot" style="background:${t.color}"></span><p>${ctxHTML(l,h.s0,h.s1,t.color)}</p></button>`}).join('');
+}
+function renderText(){
+ const p=$('pane-text');
+ if(!S.lines.length){p.innerHTML='<div class="empty">スキャンすると読み取った文章がここに表示されます。</div>';return}
+ const html=S.lines.map((l,li)=>{
+  const hs=S.hits.filter(h=>h.li===li).sort((a,b)=>a.s0-b.s0);let out='',pos=0;
+  for(const h of hs){if(h.s0<pos)continue;out+=esc(l.display.slice(pos,h.s0).join(''))+`<mark style="background:${S.terms[h.ti].color}">${esc(l.display.slice(h.s0,h.s1+1).join(''))}</mark>`;pos=h.s1+1}
+  return out+esc(l.display.slice(pos).join(''));
+ }).join('\n');
+ p.innerHTML=`<div class="row" style="margin-bottom:8px"><button class="btn" id="copyAll" type="button">全文をコピー</button></div><div class="full">${html}</div>`;
+}
+function renderCrops(){
+ const p=$('pane-crops');$('nCrops').textContent=S.crops.length?'('+S.crops.length+')':'';
+ if(!S.crops.length){p.innerHTML='<div class="empty">スキャン後に「切り抜き」で範囲をドラッグするか、ハイライトをタップして「段落を切り抜き」を選ぶとここに保存されます。</div>';return}
+ p.innerHTML=S.crops.map((c,i)=>`<div class="crop" data-i="${i}">
+  <img src="${c.url}" alt="切り抜き ${i+1}">
+  <textarea data-i="${i}" placeholder="${c.text==null?'文字を読み取り中…':'文字なし'}">${esc(c.text||'')}</textarea>
+  <div class="row"><button class="btn pri" data-act="save" type="button">画像を保存</button><button class="btn" data-act="copy" type="button">文字をコピー</button><a class="btn" href="https://www.google.com/search?q=${encodeURIComponent(c.word||c.text||'')}" target="_blank" rel="noopener">検索</a><button class="btn del" data-act="del" type="button">削除</button></div>
+ </div>`).join('');
+}
+function tab(name){
+ document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
+ ['hits','text','crops'].forEach(n=>$('pane-'+n).hidden=n!==name);
+}
+
+/* ---------- 切り抜き ---------- */
+function normRect(d){return{x0:Math.min(d.x0,d.x1),y0:Math.min(d.y0,d.y1),x1:Math.max(d.x0,d.x1),y1:Math.max(d.y0,d.y1)}}
+function setCrop(on){S.cropMode=on;if(!on)S.drag=null;setBtns();updHint()}
+async function makeCrop(b,word){
+ const F=S.frame;if(!F)return;
+ const x=Math.max(0,Math.floor(b.x0)),y=Math.max(0,Math.floor(b.y0)),w=Math.min(F.width,Math.ceil(b.x1))-x,h=Math.min(F.height,Math.ceil(b.y1))-y;
+ if(w<8||h<8)return;
+ const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(F,x,y,w,h,0,0,w,h);
+ const item={url:c.toDataURL('image/jpeg',.9),text:null,word:word||'',time:Date.now()};
+ S.crops.unshift(item);persistCrops();renderCrops();tab('crops');toast('切り抜きました');
+ try{
+  const up=Math.max(1,Math.min(3,900/Math.max(w,h)));
+  const u=document.createElement('canvas');u.width=Math.round(w*up);u.height=Math.round(h*up);
+  const g=u.getContext('2d');g.filter='grayscale(1) contrast(1.35)';g.drawImage(c,0,0,u.width,u.height);
+  const {data}=await ocr(u);
+  item.text=extractLines(data,1).map(l=>l.display.join('')).join('\n');
+ }catch(e){item.text=''}
+ status('準備OK');persistCrops();renderCrops();
+}
+function persistCrops(){let n=S.crops.length;while(n>=0){try{localStorage.setItem('tsc-crops',JSON.stringify(S.crops.slice(0,n)));return}catch(e){n-=2}}}
+async function saveImg(c){
+ const blob=await (await fetch(c.url)).blob(),d=new Date(c.time),p=v=>String(v).padStart(2,'0');
+ const name=`切り抜き_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
+ const file=new File([blob],name,{type:'image/jpeg'});
+ if(navigator.canShare?.({files:[file]})){try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}}
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+async function copy(t){try{await navigator.clipboard.writeText(t);toast('コピーしました')}catch(e){toast('コピーできませんでした')}}
+
+/* ---------- ヒットの詳細 ---------- */
+function openHit(h){
+ S.flash=h;const t=S.terms[h.ti],l=S.lines[h.li],w=l.display.slice(h.s0,h.s1+1).join('').trim(),q=encodeURIComponent(t.t);
+ $('card').innerHTML=`<h2>${esc(t.t)}</h2><div class="ctx">${ctxHTML(l,h.s0,h.s1,t.color)}</div>
+ <div class="row"><a class="btn pri" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener">Googleで検索</a><a class="btn" href="https://www.weblio.jp/content/${q}" target="_blank" rel="noopener">Weblio辞書</a><a class="btn" href="https://ja.wikipedia.org/wiki/Special:Search?search=${q}" target="_blank" rel="noopener">Wikipedia</a></div>
+ <div class="row"><button class="btn" data-act="line" type="button">この行を切り抜き</button><button class="btn" data-act="para" type="button">段落を切り抜き</button><button class="btn" data-act="close" type="button">閉じる</button></div>`;
+ $('card').dataset.word=w;$('card').onclick=e=>{
+  const a=e.target.closest('[data-act]')?.dataset.act;if(!a)return;
+  const pad=(b,k)=>{const hh=(l.bbox.y1-l.bbox.y0)*k;return{x0:b.x0-hh,y0:b.y0-hh,x1:b.x1+hh,y1:b.y1+hh}};
+  if(a==='line')makeCrop(pad(l.bbox,.4),t.t);
+  if(a==='para')makeCrop(pad(l.para,.6),t.t);
+  closePop();
+ };
+ $('pop').classList.add('show');
+}
+function closePop(){$('pop').classList.remove('show');S.flash=null}
+$('pop').onclick=e=>{if(e.target.id==='pop')closePop()};
+
+/* ---------- 入力イベント ---------- */
+function toImg(e){const v=view();if(!v)return null;const r=cv.getBoundingClientRect(),d=devicePixelRatio||1;return{x:((e.clientX-r.left)*d-v.ox)/v.s,y:((e.clientY-r.top)*d-v.oy)/v.s}}
+cv.addEventListener('pointerdown',e=>{
+ const p=toImg(e);if(!p)return;
+ if(S.cropMode&&S.frame){S.drag={x0:p.x,y0:p.y,x1:p.x,y1:p.y};cv.setPointerCapture(e.pointerId);return}
+ const v=view(),tol=14/v.s*(devicePixelRatio||1);
+ const h=S.hits.find(h=>p.x>=h.b.x0-tol&&p.x<=h.b.x1+tol&&p.y>=h.b.y0-tol&&p.y<=h.b.y1+tol);
+ if(h&&S.mode==='frozen')openHit(h);
+});
+cv.addEventListener('pointermove',e=>{if(!S.drag)return;const p=toImg(e);if(p){S.drag.x1=p.x;S.drag.y1=p.y}});
+cv.addEventListener('pointerup',()=>{if(!S.drag)return;const b=normRect(S.drag);S.drag=null;if(b.x1-b.x0>12&&b.y1-b.y0>12){makeCrop(b,S.terms.map(t=>t.t).join(' '));setCrop(false)}});
+
+$('form').onsubmit=e=>{e.preventDefault();$('q').blur();onTerms();if(S.mode==='live')scan(true);else if(!S.lines.length)scan(true)};
+let ti;$('q').addEventListener('input',()=>{clearTimeout(ti);ti=setTimeout(onTerms,250)});
+function onTerms(){parseTerms();save('tsc-q',$('q').value);computeHits();updHint()}
+$('shot').onclick=()=>S.mode==='frozen'?goLive():scan(true);
+$('auto').onclick=()=>{S.auto=!S.auto;if(S.auto){if(S.mode==='frozen')goLive();scan(false)}setBtns();updHint()};
+$('cropBtn').onclick=async()=>{
+ if(S.mode==='live'){if(S.busy)return;S.auto=false;S.frame=grab();if(!S.frame)return;S.mode='frozen';setCrop(true);scan(false);return}
+ setCrop(!S.cropMode);
+};
+$('torch').onclick=async()=>{try{S.torch=!S.torch;await S.stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:S.torch}]})}catch(e){S.torch=false}setBtns()};
+$('file').onchange=e=>{
+ const f=e.target.files[0];if(!f)return;const img=new Image();
+ img.onload=()=>{const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;c.getContext('2d').drawImage(img,0,0);URL.revokeObjectURL(img.src);S.auto=false;S.frame=c;S.mode='frozen';S.hits=[];setBtns();scan(false)};
+ img.src=URL.createObjectURL(f);e.target.value='';
+};
+$('lang').onchange=e=>{S.lang=e.target.value;save('tsc-lang',S.lang);initWorker()};
+$('fuzzy').onchange=e=>{S.fuzzy=e.target.checked;save('tsc-fuzzy',S.fuzzy);parseTerms();S.lines.forEach(l=>{l.chars=[];l.map=[];l.syms.forEach((s,i)=>{for(const ch of norm(s.text)){l.chars.push(ch);l.map.push(i)}})});computeHits()};
+document.querySelector('.tabs').onclick=e=>{const b=e.target.closest('button');if(b)tab(b.dataset.tab)};
+$('pane-hits').onclick=e=>{const b=e.target.closest('.hit');if(b)openHit(S.hits[+b.dataset.i])};
+$('pane-text').onclick=e=>{if(e.target.id==='copyAll')copy(S.lastText)};
+$('pane-crops').onclick=e=>{
+ const a=e.target.closest('[data-act]');if(!a)return;const i=+a.closest('.crop').dataset.i,c=S.crops[i];
+ if(a.dataset.act==='save')saveImg(c);
+ if(a.dataset.act==='copy')copy(c.text||'');
+ if(a.dataset.act==='del'){S.crops.splice(i,1);persistCrops();renderCrops()}
+};
+$('pane-crops').oninput=e=>{if(e.target.tagName==='TEXTAREA'){S.crops[+e.target.dataset.i].text=e.target.value;persistCrops()}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePop();setCrop(false)}});
+
+/* ---------- 起動 ---------- */
+$('q').value=load('tsc-q','');S.lang=load('tsc-lang','jpn+eng');S.fuzzy=load('tsc-fuzzy',false);
+$('lang').value=S.lang;$('fuzzy').checked=S.fuzzy;
+S.crops=load('tsc-crops',[]);
+parseTerms();renderChips();renderHits();renderText();renderCrops();setBtns();updHint();
+startCamera();
+if(window.Tesseract)initWorker();else status('OCRを読み込めません','err');
+}
+</script>
+</body>
+</html>
